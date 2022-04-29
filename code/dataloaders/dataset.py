@@ -128,18 +128,18 @@ class CTATransform(object):
             "image_weak": to_tensor(image_weak),
             "image_strong": to_tensor(image_strong),
             "label_aug": label,
-            "ops_weak": ops_weak,
-            "ops_strong": ops_strong,
+            "ops_weak": self.deserialize(ops_weak),
+            "ops_strong": self.deserialize(ops_strong),
         }
         return sample
 
-    # def get_new_policies(self):
-    #     self.ops_weak = self.cta.policy(probe=False, weak=True)
-    #     self.ops_strong = self.cta.policy(probe=False, weak=False)
-    #     return self.ops_weak, self.ops_strong
-
-    # def get_current_policies(self):
-    #     return self.ops_weak, self.ops_strong
+    def deserialize(self, policy):
+        ops = []
+        bins = []
+        for p in policy:
+            ops.append(p[0])
+            bins.append(str(p[1][0]))
+        return (ops, bins)
 
     def cta_apply(self, pil_img, ops):
         if ops is None:
