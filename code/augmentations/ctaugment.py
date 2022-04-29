@@ -94,8 +94,7 @@ class CTAugment(object):
             % (
                 k,
                 " / ".join(
-                    " ".join("%.2f" % x for x in self.rate_to_p(rate))
-                    for rate in self.rates[k]
+                    " ".join("%.2f" % x for x in self.rate_to_p(rate)) for rate in self.rates[k]
                 ),
             )
             for k in sorted(OPS.keys())
@@ -193,26 +192,26 @@ def cutout(x, level):
     return x
 
 
-@register()
-def identity(x):
-    return x
+# @register()
+# def identity(x):
+#     return x
 
 
-@register(17, 6)
-def rescale(x, scale, method):
-    s = x.size
-    scale *= 0.25
-    crop = (scale * s[0], scale * s[1], s[0] * (1 - scale), s[1] * (1 - scale))
-    methods = (
-        Image.ANTIALIAS,
-        Image.BICUBIC,
-        Image.BILINEAR,
-        Image.BOX,
-        Image.HAMMING,
-        Image.NEAREST,
-    )
-    method = methods[int(method * 5.99)]
-    return x.crop(crop).resize(x.size, method)
+# @register(17, 6)
+# def rescale(x, scale, method):
+#     s = x.size
+#     scale *= 0.25
+#     crop = (scale * s[0], scale * s[1], s[0] * (1 - scale), s[1] * (1 - scale))
+#     methods = (
+#         Image.ANTIALIAS,
+#         Image.BICUBIC,
+#         Image.BILINEAR,
+#         Image.BOX,
+#         Image.HAMMING,
+#         Image.NEAREST,
+#     )
+#     method = methods[int(method * 5.99)]
+#     return x.crop(crop).resize(x.size, method)
 
 
 @register(17)
