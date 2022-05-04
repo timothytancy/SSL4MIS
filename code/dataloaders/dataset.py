@@ -51,7 +51,8 @@ class BaseDataSets(Dataset):
         image = h5f["image"][:]
         label = h5f["label"][:]
         sample = {"image": image, "label": label}
-        sample = self.transform(sample, self.split)
+        if self.split == "train":
+            sample = self.transform(sample)
         sample["idx"] = idx
         return sample
 
@@ -101,7 +102,7 @@ class CTATransform(object):
         self.output_size = output_size
         self.cta = cta
 
-    def __call__(self, sample, split):
+    def __call__(self, sample):
         image, label = sample["image"], sample["label"]
         image = self.resize(image)
         label = self.resize(label)
@@ -110,9 +111,6 @@ class CTATransform(object):
         # fix dimensions
         image = torch.from_numpy(image.astype(np.float32)).unsqueeze(0)
         label = torch.from_numpy(label.astype(np.uint8))
-
-        if split != "train":
-            return {"image": image, "label": label}
 
         # apply augmentations
         ops_weak = self.cta.policy(probe=False, weak=True)

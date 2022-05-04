@@ -78,6 +78,7 @@ parser.add_argument("--ema_decay", type=float, default=0.99, help="ema_decay")
 parser.add_argument("--consistency_type", type=str, default="mse", help="consistency_type")
 parser.add_argument("--consistency", type=float, default=0.1, help="consistency")
 parser.add_argument("--consistency_rampup", type=float, default=200.0, help="consistency_rampup")
+parser.add_argument("--gpu", type=int, default=0, help="gpu device to use")
 args = parser.parse_args()
 
 sorted_op_names = sorted(list(OPS.keys()))
@@ -459,7 +460,7 @@ if __name__ == "__main__":
     else:
         cudnn.benchmark = False
         cudnn.deterministic = True
-    torch.cuda.set_device(0)
+    torch.cuda.set_device(args.gpu)
 
     random.seed(args.seed)
     np.random.seed(args.seed)
