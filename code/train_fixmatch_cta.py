@@ -45,26 +45,16 @@ from val_2D import test_single_volume
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--root_path", type=str, default="../data/ACDC", help="Name of Experiment")
-parser.add_argument("--exp", type=str, default="ACDC/FixMatch+imagecta", help="experiment_name")
+parser.add_argument("--exp", type=str, default="ACDC/FixMatch+imageCTA_noupdates", help="experiment_name")
 parser.add_argument("--model", type=str, default="unet", help="model_name")
-parser.add_argument(
-    "--max_iterations", type=int, default=30000, help="maximum epoch number to train"
-)
+parser.add_argument("--max_iterations", type=int, default=30000, help="maximum epoch number to train")
 parser.add_argument("--batch_size", type=int, default=24, help="batch_size per gpu")
-parser.add_argument(
-    "--deterministic", type=int, default=1, help="whether use deterministic training"
-)
-parser.add_argument(
-    "--base_lr", type=float, default=0.01, help="segmentation network learning rate"
-)
-parser.add_argument(
-    "--patch_size", type=list, default=[256, 256], help="patch size of network input"
-)
+parser.add_argument("--deterministic", type=int, default=1, help="whether use deterministic training")
+parser.add_argument("--base_lr", type=float, default=0.01, help="segmentation network learning rate")
+parser.add_argument("--patch_size", type=list, default=[256, 256], help="patch size of network input")
 parser.add_argument("--seed", type=int, default=1337, help="random seed")
 parser.add_argument("--num_classes", type=int, default=4, help="output channel of network")
-parser.add_argument(
-    "--load", default=False, action="store_true", help="restore previous checkpoint"
-)
+parser.add_argument("--load", default=False, action="store_true", help="restore previous checkpoint")
 parser.add_argument(
     "--conf_thresh", type=float, default=0.8, help="confidence threshold for using pseudo-labels",
 )
@@ -155,26 +145,6 @@ def pack_as_tensor(k, bins, error, size=5, pad_value=-555.0):
     return out
 
 
-def update_policies(probs, targets, policies, cta, aug_mode=None):
-    assert aug_mode == "weak" or aug_mode == "strong", "Indicate weak/strong augmentation"
-    if aug_mode == "weak":
-        ops1 = policies[0][0][: args.labeled_bs]
-        ops2 = policies[0][1][: args.labeled_bs]
-        bins1 = [float(i) for i in policies[1][0]][: args.labeled_bs]
-        bins2 = [float(i) for i in policies[1][1]][: args.labeled_bs]
-    else:
-        ops1 = policies[0][0][args.labeled_bs :]
-        ops2 = policies[0][1][args.labeled_bs :]
-        bins1 = [float(i) for i in policies[1][0]][args.labeled_bs :]
-        bins2 = [float(i) for i in policies[1][1]][args.labeled_bs :]
-
-    for prob, target, op1, bin1, op2, bin2 in zip(probs, targets, ops1, bins1, ops2, bins2):
-        error = prob - target
-        error = torch.abs(error).sum()
-        cta.update_rates([OP(f=op1, bins=[bin1])], 1.0 - 0.5 * error)
-        cta.update_rates([OP(f=op2, bins=[bin2])], 1.0 - 0.5 * error)
-
-
 def train(args, snapshot_path):
     base_lr = args.base_lr
     num_classes = args.num_classes
@@ -192,6 +162,26 @@ def train(args, snapshot_path):
     def worker_init_fn(worker_id):
         random.seed(args.seed + worker_id)
 
+    # TODO: write this better
+    def update_policies(probs, targets, policies, cta, aug_mode=None):
+        with torch.no_grad():
+            assert aug_mode == "weak" or aug_mode == "strong", "Indicate weak/strong augmentation"
+            if aug_mode == "weak":
+                ops1 = policies[0][0][: args.labeled_bs]
+                ops2 = policies[0][1][: args.labeled_bs]
+                bins1 = [float(i) for i in policies[1][0]][: args.labeled_bs]
+                bins2 = [float(i) for i in policies[1][1]][: args.labeled_bs]
+            else:
+                ops1 = policies[0][0][args.labeled_bs :]
+                ops2 = policies[0][1][args.labeled_bs :]
+                bins1 = [float(i) for i in policies[1][0]][args.labeled_bs :]
+                bins2 = [float(i) for i in policies[1][1]][args.labeled_bs :]
+
+            for prob, target, op1, bin1, op2, bin2 in zip(probs, targets, ops1, bins1, ops2, bins2):
+                error = ce_loss(prob.unsqueeze(0), target.unsqueeze(0).long())
+                cta.update_rates([OP(f=op1, bins=[bin1])], 1.0 - 0.5 * error)
+                cta.update_rates([OP(f=op2, bins=[bin2])], 1.0 - 0.5 * error)
+
     cta = CTAugment()
     transform = CTATransform(args.patch_size, cta)
 
@@ -203,9 +193,7 @@ def train(args, snapshot_path):
     print("Total silices is: {}, labeled slices is: {}".format(total_slices, labeled_slice))
     labeled_idxs = list(range(0, labeled_slice))
     unlabeled_idxs = list(range(labeled_slice, total_slices))
-    batch_sampler = TwoStreamBatchSampler(
-        labeled_idxs, unlabeled_idxs, batch_size, batch_size - args.labeled_bs
-    )
+    batch_sampler = TwoStreamBatchSampler(labeled_idxs, unlabeled_idxs, batch_size, batch_size - args.labeled_bs)
 
     model = create_model()
     ema_model = create_model(ema=True)
@@ -242,11 +230,7 @@ def train(args, snapshot_path):
             logging.warning(f"Unable to restore model checkpoint: {e}, using new model")
 
     trainloader = DataLoader(
-        db_train,
-        batch_sampler=batch_sampler,
-        num_workers=4,
-        pin_memory=True,
-        worker_init_fn=worker_init_fn,
+        db_train, batch_sampler=batch_sampler, num_workers=4, pin_memory=True, worker_init_fn=worker_init_fn,
     )
 
     valloader = DataLoader(db_val, batch_size=1, shuffle=False, num_workers=1)
@@ -294,75 +278,64 @@ def train(args, snapshot_path):
             with torch.no_grad():
                 ema_outputs_soft = torch.softmax(ema_model(weak_batch), dim=1)
                 pseudo_mask = (ema_outputs_soft > args.conf_thresh).float()
-                pseudo_outputs = torch.argmax(
-                    ema_outputs_soft.detach() * pseudo_mask, dim=1, keepdim=False,
-                )
+                pseudo_outputs = torch.argmax(ema_outputs_soft.detach() * pseudo_mask, dim=1, keepdim=False,)
 
             consistency_weight = get_current_consistency_weight(iter_num // 150)
 
-            # supervised loss calculations
-            sup_loss = ce_loss(
-                outputs_weak[: args.labeled_bs], label_batch[:][: args.labeled_bs].long(),
-            ) + dice_loss(
+            # supervised loss
+            sup_loss = ce_loss(outputs_weak[: args.labeled_bs], label_batch[:][: args.labeled_bs].long(),) + dice_loss(
                 outputs_weak_soft[: args.labeled_bs], label_batch[: args.labeled_bs].unsqueeze(1),
             )
-            # unsupervised loss calculations
-            unsup_loss = ce_loss(
-                outputs_strong[args.labeled_bs :], pseudo_outputs[args.labeled_bs :]
-            ) + dice_loss(
-                outputs_strong_soft[args.labeled_bs :],
-                pseudo_outputs[args.labeled_bs :].unsqueeze(1),
+            # unsupervised loss
+            unsup_loss = ce_loss(outputs_strong[args.labeled_bs :], pseudo_outputs[args.labeled_bs :]) + dice_loss(
+                outputs_strong_soft[args.labeled_bs :], pseudo_outputs[args.labeled_bs :].unsqueeze(1),
             )
 
-            # loss = sup_loss + weighted unsup_loss
+            # calculate loss, update weights
             loss = sup_loss + consistency_weight * unsup_loss
-
-            # set gradients to zero
             optimizer.zero_grad()
-
-            # backpropagate loss, remember that this accounts for both models
             loss.backward()
-
-            # update weights for both models
             optimizer.step()
+
+            # update student model
             update_ema_variables(model, ema_model, args.ema_decay, iter_num)
-            iter_num = iter_num + 1
 
             # update ctaugment bins
-            with torch.no_grad():
-                update_policies(
-                    outputs_weak_soft[: args.labeled_bs],
-                    label_batch[: args.labeled_bs],
-                    ops_weak,
-                    cta,
-                    aug_mode="weak",
-                )
-                update_policies(
-                    outputs_strong_soft[args.labeled_bs :],
-                    label_batch[args.labeled_bs :],
-                    ops_strong,
-                    cta,
-                    aug_mode="strong",
-                )
+
+            # update_policies(
+            #     outputs_weak_soft[: args.labeled_bs], label_batch[: args.labeled_bs], ops_weak, cta, aug_mode="weak",
+            # )
+            # update_policies(
+            #     outputs_strong_soft[args.labeled_bs :],
+            #     label_batch[args.labeled_bs :],
+            #     ops_strong,
+            #     cta,
+            #     aug_mode="strong",
+            # )
 
             lr_ = base_lr * (1.0 - iter_num / max_iterations) ** 0.9
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr_
 
-            writer.add_scalar("lr", lr_, iter_num)
-            writer.add_scalar("consistency_weight/consistency_weight", consistency_weight, iter_num)
-            writer.add_scalar("loss/model_loss", loss, iter_num)
             logging.info("iteration %d : model loss : %f" % (iter_num, loss.item()))
+            iter_num = iter_num + 1
+
             if iter_num % 50 == 0:
+                # add scalars
+                writer.add_scalar("lr", lr_, iter_num)
+                writer.add_scalar("consistency_weight/consistency_weight", consistency_weight, iter_num)
+                writer.add_scalar("loss/model_loss", loss, iter_num)
+
+            if iter_num % 200 == 0:
                 # show weakly augmented image
                 image = weak_batch[1, 0:1, :, :]
                 writer.add_image("train/Image", image, iter_num)
-                outputs_weak = torch.argmax(torch.softmax(outputs_weak, dim=1), dim=1, keepdim=True)
                 # show strongly augmented image
                 image_strong = strong_batch[1, 0:1, :, :]
                 writer.add_image("train/StrongImage", image_strong, iter_num)
                 # show model prediction (strong augment)
-                writer.add_image("train/model_Prediction", outputs_strong[1, ...] * 50, iter_num)
+                outputs_strong_display = torch.argmax(outputs_strong_soft, dim=1, keepdim=True)
+                writer.add_image("train/model_Prediction", outputs_strong_display[1, ...] * 50, iter_num)
                 # show ground truth label
                 labs = label_batch[1, ...].unsqueeze(0) * 50
                 writer.add_image("train/GroundTruth", labs, iter_num)
@@ -370,41 +343,24 @@ def train(args, snapshot_path):
                 pseudo_labs = pseudo_outputs[1, ...].unsqueeze(0) * 50
                 writer.add_image("train/PseudoLabel", pseudo_labs, iter_num)
 
-            if iter_num % 200 == 0:
+                # validate
                 model.eval()
                 ema_model.eval()
                 metric_list = 0.0
                 with torch.no_grad():
                     for i_batch, sampled_batch in enumerate(valloader):
                         metric_i = test_single_volume(
-                            sampled_batch["image"],
-                            sampled_batch["label"],
-                            ema_model,
-                            classes=num_classes,
+                            sampled_batch["image"], sampled_batch["label"], ema_model, classes=num_classes,
                         )
                         metric_list += np.array(metric_i)
-
-                        ####################
-                        # label_batch = sampled_batch["label"][0, 0:1, :, :]
-                        # labs = label_batch * 50
-                        # writer.add_image("test/GroundTruth", labs, iter_num)
-
-                        # img_batch = sampled_batch["image"][0, 0:1, :, :]
-                        # img_test = img_batch * 50
-                        # writer.add_image("test/image", img_test, iter_num)
-                        ####################
 
                     metric_list = metric_list / len(db_val)
                 for class_i in range(num_classes - 1):
                     writer.add_scalar(
-                        "info/model_val_{}_dice".format(class_i + 1),
-                        metric_list[class_i, 0],
-                        iter_num,
+                        "info/model_val_{}_dice".format(class_i + 1), metric_list[class_i, 0], iter_num,
                     )
                     writer.add_scalar(
-                        "info/model_val_{}_hd95".format(class_i + 1),
-                        metric_list[class_i, 1],
-                        iter_num,
+                        "info/model_val_{}_hd95".format(class_i + 1), metric_list[class_i, 1], iter_num,
                     )
 
                 performance = np.mean(metric_list, axis=0)[0]
@@ -416,18 +372,14 @@ def train(args, snapshot_path):
                 if performance > best_performance:
                     best_performance = performance
                     save_mode_path = os.path.join(
-                        snapshot_path,
-                        "model_iter_{}_dice_{}.pth".format(iter_num, round(best_performance, 4)),
+                        snapshot_path, "model_iter_{}_dice_{}.pth".format(iter_num, round(best_performance, 4)),
                     )
                     save_best = os.path.join(snapshot_path, "{}_best_model.pth".format(args.model))
-                    # torch.save(model.state_dict(), save_mode_path)
-                    # torch.save(model.state_dict(), save_best)
                     util.save_checkpoint(epoch_num, model, optimizer, loss, save_mode_path)
                     util.save_checkpoint(epoch_num, model, optimizer, loss, save_best)
 
                 logging.info(
-                    "iteration %d : model_mean_dice : %f model_mean_hd95 : %f"
-                    % (iter_num, performance, mean_hd95)
+                    "iteration %d : model_mean_dice : %f model_mean_hd95 : %f" % (iter_num, performance, mean_hd95)
                 )
             model.train()
             ema_model.train()
@@ -445,7 +397,6 @@ def train(args, snapshot_path):
 
             if iter_num >= max_iterations:
                 break
-            time1 = time.time()
         if iter_num >= max_iterations:
             iterator.close()
             break

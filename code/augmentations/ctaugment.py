@@ -90,12 +90,7 @@ class CTAugment(object):
     def stats(self):
         return "\n".join(
             "%-16s    %s"
-            % (
-                k,
-                " / ".join(
-                    " ".join("%.2f" % x for x in self.rate_to_p(rate)) for rate in self.rates[k]
-                ),
-            )
+            % (k, " / ".join(" ".join("%.2f" % x for x in self.rate_to_p(rate)) for rate in self.rates[k]),)
             for k in sorted(OPS.keys())
         )
 

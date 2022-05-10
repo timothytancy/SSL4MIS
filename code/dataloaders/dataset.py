@@ -232,8 +232,7 @@ class TwoStreamBatchSampler(Sampler):
         return (
             primary_batch + secondary_batch
             for (primary_batch, secondary_batch) in zip(
-                grouper(primary_iter, self.primary_batch_size),
-                grouper(secondary_iter, self.secondary_batch_size),
+                grouper(primary_iter, self.primary_batch_size), grouper(secondary_iter, self.secondary_batch_size),
             )
         )
 
