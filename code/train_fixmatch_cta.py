@@ -30,6 +30,7 @@ from tqdm import tqdm
 import augmentations
 from augmentations.ctaugment import CTAugment, OP, OPS
 from PIL import Image
+from pprint import pprint
 
 from dataloaders import utils
 from dataloaders.dataset import (
@@ -45,7 +46,7 @@ from val_2D import test_single_volume
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--root_path", type=str, default="../data/ACDC", help="Name of Experiment")
-parser.add_argument("--exp", type=str, default="ACDC/FixMatch+imageCTA_noupdates", help="experiment_name")
+parser.add_argument("--exp", type=str, default="ACDC/FixMatch_10may", help="experiment_name")
 parser.add_argument("--model", type=str, default="unet", help="model_name")
 parser.add_argument("--max_iterations", type=int, default=30000, help="maximum epoch number to train")
 parser.add_argument("--batch_size", type=int, default=24, help="batch_size per gpu")
@@ -163,19 +164,25 @@ def train(args, snapshot_path):
         random.seed(args.seed + worker_id)
 
     # TODO: write this better
-    def update_policies(probs, targets, policies, cta, aug_mode=None):
+    def update_policies(probs, targets, policies, cta, supervised):
         with torch.no_grad():
-            assert aug_mode == "weak" or aug_mode == "strong", "Indicate weak/strong augmentation"
-            if aug_mode == "weak":
+            # for labeled images (first half), only weak augments are applied
+            if supervised:
                 ops1 = policies[0][0][: args.labeled_bs]
                 ops2 = policies[0][1][: args.labeled_bs]
                 bins1 = [float(i) for i in policies[1][0]][: args.labeled_bs]
                 bins2 = [float(i) for i in policies[1][1]][: args.labeled_bs]
+            # unlabeled images (second half) have weak AND strong augmentations applied
             else:
                 ops1 = policies[0][0][args.labeled_bs :]
                 ops2 = policies[0][1][args.labeled_bs :]
                 bins1 = [float(i) for i in policies[1][0]][args.labeled_bs :]
                 bins2 = [float(i) for i in policies[1][1]][args.labeled_bs :]
+
+            ops1 = policies[0][0]
+            ops2 = policies[0][1]
+            bins1 = [float(i) for i in policies[1][0]]
+            bins2 = [float(i) for i in policies[1][1]]
 
             for prob, target, op1, bin1, op2, bin2 in zip(probs, targets, ops1, bins1, ops2, bins2):
                 error = ce_loss(prob.unsqueeze(0), target.unsqueeze(0).long())
@@ -251,22 +258,28 @@ def train(args, snapshot_path):
 
     # nice progress bar, begin training
     iterator = tqdm(range(start_epoch, max_epoch), ncols=70)
-    current_iter = 0
 
     for epoch_num in iterator:
         for i_batch, sampled_batch in enumerate(trainloader):
-            weak_batch, strong_batch, label_batch, ops_weak, ops_strong = (
+            image_batch, weak_batch, strong_batch, label_batch, label_sup, ops_weak, ops_strong = (
+                sampled_batch["image"],
                 sampled_batch["image_weak"],
                 sampled_batch["image_strong"],
                 sampled_batch["label_aug"],
+                sampled_batch["label"],
                 sampled_batch["ops_weak"],
                 sampled_batch["ops_strong"],
             )
-            weak_batch, strong_batch, label_batch = (
+            image_batch, weak_batch, strong_batch, label_batch, label_sup = (
+                image_batch.cuda(),
                 weak_batch.cuda(),
                 strong_batch.cuda(),
                 label_batch.cuda(),
+                label_sup.cuda(),
             )
+
+            outputs_sup = model(image_batch)
+            outputs_sup_soft = torch.softmax(outputs_sup, dim=1)
 
             # outputs for model
             outputs_weak = model(weak_batch)
@@ -283,8 +296,8 @@ def train(args, snapshot_path):
             consistency_weight = get_current_consistency_weight(iter_num // 150)
 
             # supervised loss
-            sup_loss = ce_loss(outputs_weak[: args.labeled_bs], label_batch[:][: args.labeled_bs].long(),) + dice_loss(
-                outputs_weak_soft[: args.labeled_bs], label_batch[: args.labeled_bs].unsqueeze(1),
+            sup_loss = ce_loss(outputs_sup[: args.labeled_bs], label_sup[:][: args.labeled_bs].long(),) + dice_loss(
+                outputs_sup_soft[: args.labeled_bs], label_sup[: args.labeled_bs].unsqueeze(1),
             )
             # unsupervised loss
             unsup_loss = ce_loss(outputs_strong[args.labeled_bs :], pseudo_outputs[args.labeled_bs :]) + dice_loss(
@@ -301,17 +314,10 @@ def train(args, snapshot_path):
             update_ema_variables(model, ema_model, args.ema_decay, iter_num)
 
             # update ctaugment bins
-
-            # update_policies(
-            #     outputs_weak_soft[: args.labeled_bs], label_batch[: args.labeled_bs], ops_weak, cta, aug_mode="weak",
-            # )
-            # update_policies(
-            #     outputs_strong_soft[args.labeled_bs :],
-            #     label_batch[args.labeled_bs :],
-            #     ops_strong,
-            #     cta,
-            #     aug_mode="strong",
-            # )
+            update_policies(
+                outputs_strong_soft, label_batch, ops_strong, cta, supervised=False,
+            )
+            update_policies(outputs_strong_soft, label_batch, ops_weak, cta, supervised=False)
 
             lr_ = base_lr * (1.0 - iter_num / max_iterations) ** 0.9
             for param_group in optimizer.param_groups:

@@ -117,15 +117,16 @@ class CTATransform(object):
         ops_strong = self.cta.policy(probe=False, weak=False)
         image_weak = augmentations.cta_apply(transforms.ToPILImage()(image), ops_weak)
         image_strong = augmentations.cta_apply(image_weak, ops_strong)
-        label = augmentations.cta_apply(transforms.ToPILImage()(label), ops_weak)
-        label = to_tensor(label).squeeze(0)
-        label = torch.round(255 * label).int()
+        label_aug = augmentations.cta_apply(transforms.ToPILImage()(label), ops_weak)
+        label_aug = to_tensor(label_aug).squeeze(0)
+        label_aug = torch.round(255 * label_aug).int()
 
         sample = {
             "image": image,
             "image_weak": to_tensor(image_weak),
             "image_strong": to_tensor(image_strong),
-            "label_aug": label,
+            "label_aug": label_aug,
+            "label": label,
             "ops_weak": self.deserialize(ops_weak),
             "ops_strong": self.deserialize(ops_strong),
         }
